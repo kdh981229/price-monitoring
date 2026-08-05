@@ -1,0 +1,96 @@
+{
+  "schema_version": "1.0",
+  "timezone": "Asia/Seoul",
+  "schedule_hours_kst": [0, 4, 8, 12, 16, 20],
+  "briefing_hour_kst": 8,
+  "sources": [
+    {
+      "id": "naver",
+      "name": "네이버",
+      "url": "https://search.naver.com/search.naver?query={query}",
+      "allowed_domains": []
+    },
+    {
+      "id": "daum",
+      "name": "다음",
+      "url": "https://search.daum.net/search?w=tot&q={query}",
+      "allowed_domains": []
+    },
+    {
+      "id": "google",
+      "name": "구글",
+      "url": "https://www.google.com/search?hl=ko&gl=kr&q={query}",
+      "allowed_domains": []
+    },
+    {
+      "id": "11st",
+      "name": "11번가",
+      "url": "https://search.11st.co.kr/Search.tmall?kwd={query}",
+      "allowed_domains": ["11st.co.kr"]
+    },
+    {
+      "id": "gmarket",
+      "name": "G마켓",
+      "url": "https://browse.gmarket.co.kr/search?keyword={query}",
+      "allowed_domains": ["gmarket.co.kr"]
+    },
+    {
+      "id": "auction",
+      "name": "옥션",
+      "url": "https://browse.auction.co.kr/search?keyword={query}",
+      "allowed_domains": ["auction.co.kr"]
+    }
+  ],
+  "products": [
+    {
+      "id": "hong-sam-bon-jeong",
+      "name": "정관장 홍삼본정",
+      "queries": ["정관장 홍삼본정", "홍삼본정", "본정"],
+      "strong_phrases": ["정관장홍삼본정", "홍삼본정"],
+      "weak_terms": ["본정"],
+      "context_terms": ["정관장", "홍삼"],
+      "exclude_terms": ["본정스틱", "본정 데일리스틱", "본정액", "본정환"],
+      "policy": {
+        "type": "exposure_prohibited_except_allowlist",
+        "allowlist_urls": [],
+        "empty_allowlist_action": "review_required"
+      }
+    },
+    {
+      "id": "hong-sam-bo-ga",
+      "name": "정관장 홍삼보가",
+      "queries": ["정관장 홍삼보가", "홍삼보가", "보가"],
+      "strong_phrases": ["정관장홍삼보가", "홍삼보가"],
+      "weak_terms": ["보가"],
+      "context_terms": ["정관장", "홍삼"],
+      "exclude_terms": [],
+      "policy": {
+        "type": "minimum_display_price",
+        "normal_min_krw": 80000,
+        "critical_below_krw": 78000
+      }
+    }
+  ],
+  "collection": {
+    "timeout_seconds": 20,
+    "retries": 2,
+    "max_candidates_per_query": 12,
+    "max_detail_pages_per_run": 40,
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/127.0 Safari/537.36 PriceMonitoring/1.0"
+  },
+  "drive": {
+    "root_folder_name": "가격 모니터링",
+    "paths": {
+      "latest_index": "current/latest.json",
+      "immutable_runs": "history/{yyyy}/{mm}/{dd}",
+      "basic_briefings": "briefings/{yyyy}/{mm}",
+      "final_briefings": "final-briefings/{yyyy}/{mm}",
+      "lessons": "lessons"
+    },
+    "write_ownership": {
+      "github_actions": ["current", "history", "briefings"],
+      "codex": ["final-briefings", "lessons"]
+    }
+  }
+}
+
