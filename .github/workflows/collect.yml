@@ -8,10 +8,8 @@ on:
         required: false
         default: false
         type: boolean
-  # Activation gate: add the schedule below only after the Apps Script web app and
-  # both repository secrets have been configured and a manual run has passed.
-  # schedule:
-  #   - cron: "0 3,7,11,15,19,23 * * *"  # 12/16/20/00/04/08 KST
+  schedule:
+    - cron: "0 3,7,11,15,19,23 * * *"  # 12/16/20/00/04/08 KST
 
 permissions:
   contents: read
@@ -47,4 +45,3 @@ jobs:
           path: out/
           if-no-files-found: warn
           retention-days: 30
-
