@@ -1,0 +1,50 @@
+name: Collect price exposure
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_briefing:
+        description: "Generate an 08:00 basic briefing for this manual run"
+        required: false
+        default: false
+        type: boolean
+  # Activation gate: add the schedule below only after the Apps Script web app and
+  # both repository secrets have been configured and a manual run has passed.
+  # schedule:
+  #   - cron: "0 3,7,11,15,19,23 * * *"  # 12/16/20/00/04/08 KST
+
+permissions:
+  contents: read
+
+concurrency:
+  group: price-monitoring-collector
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      TZ: Asia/Seoul
+      DRIVE_WEBHOOK_URL: ${{ secrets.DRIVE_WEBHOOK_URL }}
+      DRIVE_SHARED_SECRET: ${{ secrets.DRIVE_SHARED_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Collect and save to Drive
+        shell: bash
+        run: |
+          args=()
+          if [[ "${{ inputs.force_briefing }}" == "true" ]]; then args+=(--force-briefing); fi
+          python src/monitor.py "${args[@]}"
+      - name: Preserve run artifact for diagnosis
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: price-monitoring-${{ github.run_id }}
+          path: out/
+          if-no-files-found: warn
+          retention-days: 30
+
