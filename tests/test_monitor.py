@@ -1,6 +1,12 @@
+Exit code: 0
+Wall time: 1.4 seconds
+Output:
 import unittest
 
-from src.monitor import canonical_url, classify_product, display_price, evaluate
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from src.monitor import canonical_url, classify_product, display_price, evaluate, scheduled_slot_hour
 
 
 PRODUCTS = [
@@ -38,6 +44,11 @@ class MonitorRulesTest(unittest.TestCase):
     def test_tracking_parameters_are_removed(self):
         url = canonical_url("https://shop.example/item/1?utm_source=x&item=2", "https://example.com")
         self.assertEqual(url, "https://shop.example/item/1?item=2")
+
+    def test_delayed_08_schedule_keeps_08_slot(self):
+        config = {"schedule_hours_kst": [0, 4, 8, 12, 16, 20]}
+        delayed_start = datetime(2026, 8, 7, 9, 30, tzinfo=ZoneInfo("Asia/Seoul"))
+        self.assertEqual(scheduled_slot_hour(config, delayed_start, 8), 8)
 
 
 if __name__ == "__main__":
