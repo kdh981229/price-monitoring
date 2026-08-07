@@ -1,3 +1,6 @@
+Exit code: 0
+Wall time: 1.5 seconds
+Output:
 /** GitHub Actions -> Google Drive validation and immutable storage gateway. */
 
 const ROOT_FOLDER_ID = '1A6JFEZZqFfSkecTzPebZmgPZtRrN54rN';
@@ -47,7 +50,9 @@ function doPost(e) {
       const briefingBytes = Utilities.base64Decode(payload.briefing_base64);
       verifySha256_(briefingBytes, payload.briefing_sha256);
       const briefingFolder = ensurePath_(root, ['briefings', dateMatch[1], dateMatch[2]]);
-      const briefing = createImmutable_(briefingFolder, payload.briefing_name, briefingBytes, payload.briefing_sha256, 'text/markdown');
+      // The 09:15 KST fallback may legitimately repeat an already completed 08시 run.
+      // Keep the first briefing immutable, but still accept and archive the fallback raw JSON.
+      const briefing = createBriefingOnce_(briefingFolder, payload.briefing_name, briefingBytes, payload.briefing_sha256);
       briefingId = briefing.getId();
     }
     return jsonResponse_({ok: true, run_id: payload.run_id, immutable_file_id: immutable.getId(), briefing_file_id: briefingId});
@@ -78,6 +83,12 @@ function createImmutable_(folder, name, bytes, sha256, mimeType) {
   }
   const blob = Utilities.newBlob(bytes, mimeType, name);
   return folder.createFile(blob);
+}
+
+function createBriefingOnce_(folder, name, bytes, sha256) {
+  const matches = folder.getFilesByName(name);
+  if (matches.hasNext()) return matches.next();
+  return folder.createFile(Utilities.newBlob(bytes, 'text/markdown', name));
 }
 
 function replaceNamedFile_(folder, name, text, mimeType) {
