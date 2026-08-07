@@ -1,3 +1,6 @@
+Exit code: 0
+Wall time: 1.5 seconds
+Output:
 #!/usr/bin/env python3
 """Public-web listing collector and deterministic first-pass briefing generator."""
 
@@ -310,7 +313,17 @@ def source_error(source: dict[str, Any], query: str, exc: Exception, stage: str)
     }
 
 
-def collect(config: dict[str, Any], now: datetime) -> dict[str, Any]:
+def scheduled_slot_hour(config: dict[str, Any], now: datetime, explicit_slot: int | None = None) -> int:
+    """Return the intended KST collection slot, even if Actions starts late."""
+    hours = [int(hour) for hour in config["schedule_hours_kst"]]
+    if explicit_slot is not None:
+        if explicit_slot not in hours:
+            raise ValueError(f"scheduled slot must be one of {hours}, got {explicit_slot}")
+        return explicit_slot
+    return max(hour for hour in hours if hour <= now.hour)
+
+
+def collect(config: dict[str, Any], now: datetime, explicit_slot: int | None = None) -> dict[str, Any]:
     fetcher = Fetcher(config["collection"])
     errors: list[dict[str, Any]] = []
     merged: dict[str, dict[str, Any]] = {}
@@ -401,7 +414,7 @@ def collect(config: dict[str, Any], now: datetime) -> dict[str, Any]:
     for item in listings:
         counts[item["rule_status"]] = counts.get(item["rule_status"], 0) + 1
     run_id = now.strftime("run-%Y%m%dT%H%M%S%z")
-    slot_hour = max(hour for hour in config["schedule_hours_kst"] if hour <= now.hour)
+    slot_hour = scheduled_slot_hour(config, now, explicit_slot)
     return {
         "schema_version": "1.0", "record_type": "immutable_scan_run",
         "run": {
@@ -483,13 +496,15 @@ def main() -> int:
     parser.add_argument("--config", default="config/monitoring.json")
     parser.add_argument("--output-dir", default="out")
     parser.add_argument("--force-briefing", action="store_true")
+    parser.add_argument("--scheduled-slot-hour", type=int,
+                        help="Intended KST schedule slot supplied by GitHub Actions; preserves 08시 briefing on delayed starts.")
     parser.add_argument("--no-upload", action="store_true")
     args = parser.parse_args()
     config = json.loads(Path(args.config).read_text(encoding="utf-8"))
     now = datetime.now(ZoneInfo(config["timezone"]))
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    result = collect(config, now)
+    result = collect(config, now, args.scheduled_slot_hour)
     result_path = output_dir / f"{result['run']['run_id']}.json"
     result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     is_briefing_slot = result["run"]["scheduled_slot_hour_kst"] == int(config["briefing_hour_kst"])
