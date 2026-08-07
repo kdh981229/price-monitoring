@@ -1,3 +1,6 @@
+Exit code: 0
+Wall time: 1.5 seconds
+Output:
 name: Collect price exposure
 
 on:
@@ -10,6 +13,8 @@ on:
         type: boolean
   schedule:
     - cron: "0 3,7,11,15,19,23 * * *"  # 12/16/20/00/04/08 KST
+    # 08시 회차가 GitHub 혼잡으로 누락됐을 때의 보정 회차 (09:15 KST).
+    - cron: "15 0 * * *"
 
 permissions:
   contents: read
@@ -26,6 +31,8 @@ jobs:
       TZ: Asia/Seoul
       DRIVE_WEBHOOK_URL: ${{ secrets.DRIVE_WEBHOOK_URL }}
       DRIVE_SHARED_SECRET: ${{ secrets.DRIVE_SHARED_SECRET }}
+      # GitHub가 실제 시작을 지연해도, 원래 예정된 08시 회차는 08시 브리핑으로 처리한다.
+      SCHEDULED_SLOT_HOUR_KST: ${{ github.event.schedule == '0 23 * * *' && '8' || github.event.schedule == '0 19 * * *' && '4' || github.event.schedule == '0 15 * * *' && '0' || github.event.schedule == '0 11 * * *' && '20' || github.event.schedule == '0 7 * * *' && '16' || github.event.schedule == '0 3 * * *' && '12' || github.event.schedule == '15 0 * * *' && '8' || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -36,6 +43,7 @@ jobs:
         run: |
           args=()
           if [[ "${{ inputs.force_briefing }}" == "true" ]]; then args+=(--force-briefing); fi
+          if [[ -n "$SCHEDULED_SLOT_HOUR_KST" ]]; then args+=(--scheduled-slot-hour "$SCHEDULED_SLOT_HOUR_KST"); fi
           python src/monitor.py "${args[@]}"
       - name: Preserve run artifact for diagnosis
         if: always()
@@ -45,3 +53,4 @@ jobs:
           path: out/
           if-no-files-found: warn
           retention-days: 30
+
