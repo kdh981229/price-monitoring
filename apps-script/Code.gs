@@ -1,5 +1,5 @@
 Exit code: 0
-Wall time: 1.5 seconds
+Wall time: 1.4 seconds
 Output:
 /** GitHub Actions -> Google Drive validation and immutable storage gateway. */
 
@@ -15,6 +15,14 @@ function doPost(e) {
     const expectedSecret = PropertiesService.getScriptProperties().getProperty('SHARED_SECRET');
     if (!expectedSecret || payload.secret !== expectedSecret) {
       throw new Error('unauthorized');
+    }
+    if (payload.action === 'slot_status') {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(payload.date || ''))) throw new Error('invalid date');
+      if (payload.scheduled_slot_hour_kst === undefined) throw new Error('missing field: scheduled_slot_hour_kst');
+      const slot = Number(payload.scheduled_slot_hour_kst);
+      if ([0, 4, 8, 12, 16, 20].indexOf(slot) === -1) throw new Error('invalid scheduled_slot_hour_kst');
+      const root = DriveApp.getFolderById(ROOT_FOLDER_ID);
+      return jsonResponse_({ok: true, completed: slotCompleted_(root, String(payload.date), slot)});
     }
     requireFields_(payload, ['run_id', 'json_name', 'json_base64', 'json_sha256']);
     if (!/^run-\d{8}T\d{6}[+-]\d{4}$/.test(payload.run_id)) {
@@ -69,6 +77,26 @@ function ensurePath_(root, parts) {
     folder = matches.hasNext() ? matches.next() : folder.createFolder(name);
   });
   return folder;
+}
+
+function slotCompleted_(root, date, slot) {
+  const parts = date.split('-');
+  let folder = root;
+  for (const name of ['history', parts[0], parts[1], parts[2]]) {
+    const matches = folder.getFoldersByName(name);
+    if (!matches.hasNext()) return false;
+    folder = matches.next();
+  }
+  const files = folder.getFiles();
+  while (files.hasNext()) {
+    try {
+      const parsed = JSON.parse(files.next().getBlob().getDataAsString('UTF-8'));
+      if (parsed.record_type === 'immutable_scan_run' && parsed.run && Number(parsed.run.scheduled_slot_hour_kst) === slot) return true;
+    } catch (error) {
+      // A non-JSON file or corrupt historical item must not block a fallback collection.
+    }
+  }
+  return false;
 }
 
 function createImmutable_(folder, name, bytes, sha256, mimeType) {
