@@ -1,5 +1,5 @@
 Exit code: 0
-Wall time: 1.5 seconds
+Wall time: 1.4 seconds
 Output:
 #!/usr/bin/env python3
 """Public-web listing collector and deterministic first-pass briefing generator."""
@@ -323,6 +323,25 @@ def scheduled_slot_hour(config: dict[str, Any], now: datetime, explicit_slot: in
     return max(hour for hour in hours if hour <= now.hour)
 
 
+def slot_already_archived(gateway_url: str, secret: str, now: datetime, slot_hour: int) -> bool:
+    """Ask the Drive gateway whether the intended KST slot already completed."""
+    payload = {
+        "action": "slot_status",
+        "secret": secret,
+        "date": now.strftime("%Y-%m-%d"),
+        "scheduled_slot_hour_kst": slot_hour,
+    }
+    request = urllib.request.Request(
+        gateway_url, data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        decoded = json.loads(response.read().decode("utf-8", errors="replace"))
+    if not decoded.get("ok"):
+        raise RuntimeError(f"Drive gateway slot status failed: {decoded.get('error', 'unknown error')}")
+    return bool(decoded.get("completed"))
+
+
 def collect(config: dict[str, Any], now: datetime, explicit_slot: int | None = None) -> dict[str, Any]:
     fetcher = Fetcher(config["collection"])
     errors: list[dict[str, Any]] = []
@@ -498,13 +517,24 @@ def main() -> int:
     parser.add_argument("--force-briefing", action="store_true")
     parser.add_argument("--scheduled-slot-hour", type=int,
                         help="Intended KST schedule slot supplied by GitHub Actions; preserves 08시 briefing on delayed starts.")
+    parser.add_argument("--skip-if-slot-exists", action="store_true",
+                        help="Exit successfully when the Drive gateway already has this date and schedule slot.")
     parser.add_argument("--no-upload", action="store_true")
     args = parser.parse_args()
     config = json.loads(Path(args.config).read_text(encoding="utf-8"))
     now = datetime.now(ZoneInfo(config["timezone"]))
+    intended_slot = scheduled_slot_hour(config, now, args.scheduled_slot_hour)
+    if args.skip_if_slot_exists:
+        gateway = os.environ.get("DRIVE_WEBHOOK_URL")
+        secret = os.environ.get("DRIVE_SHARED_SECRET")
+        if not gateway or not secret:
+            raise RuntimeError("DRIVE_WEBHOOK_URL and DRIVE_SHARED_SECRET GitHub secrets are required")
+        if slot_already_archived(gateway, secret, now, intended_slot):
+            print(json.dumps({"status": "skipped", "reason": "scheduled slot already archived", "slot_hour_kst": intended_slot}, ensure_ascii=False))
+            return 0
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    result = collect(config, now, args.scheduled_slot_hour)
+    result = collect(config, now, intended_slot)
     result_path = output_dir / f"{result['run']['run_id']}.json"
     result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     is_briefing_slot = result["run"]["scheduled_slot_hour_kst"] == int(config["briefing_hour_kst"])
