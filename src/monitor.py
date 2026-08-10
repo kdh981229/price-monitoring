@@ -1,6 +1,3 @@
-Exit code: 0
-Wall time: 1.4 seconds
-Output:
 #!/usr/bin/env python3
 """Public-web listing collector and deterministic first-pass briefing generator."""
 
