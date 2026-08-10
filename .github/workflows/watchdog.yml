@@ -1,0 +1,48 @@
+name: Watch collection health
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_date_kst:
+        description: "Expected collection date (YYYY-MM-DD); blank means today in KST"
+        required: false
+        type: string
+      expected_slot_hour_kst:
+        description: "Expected collection slot"
+        required: true
+        default: "8"
+        type: choice
+        options: ["0", "4", "8", "12", "16", "20"]
+  schedule:
+    # 주 수집(:07)과 조건부 재시도(:17)가 끝난 뒤 28분의 여유를 두고 검사한다.
+    - cron: "45 3,7,11,15,19,23 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: price-monitoring-watchdog
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TZ: Asia/Seoul
+      DRIVE_WEBHOOK_URL: ${{ secrets.DRIVE_WEBHOOK_URL }}
+      DRIVE_SHARED_SECRET: ${{ secrets.DRIVE_SHARED_SECRET }}
+      EXPECTED_DATE_KST: ${{ inputs.expected_date_kst }}
+      EXPECTED_SLOT_HOUR_KST: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_slot_hour_kst || (github.event.schedule == '45 23 * * *' && '8' || github.event.schedule == '45 19 * * *' && '4' || github.event.schedule == '45 15 * * *' && '0' || github.event.schedule == '45 11 * * *' && '20' || github.event.schedule == '45 7 * * *' && '16' || '12') }}
+      WATCHDOG_WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check Drive collection slot
+        shell: bash
+        run: |
+          args=(--scheduled-slot-hour "$EXPECTED_SLOT_HOUR_KST")
+          if [[ -n "$EXPECTED_DATE_KST" ]]; then args+=(--date "$EXPECTED_DATE_KST"); fi
+          python src/watchdog.py "${args[@]}"
