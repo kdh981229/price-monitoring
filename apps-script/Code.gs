@@ -1,6 +1,3 @@
-Exit code: 0
-Wall time: 1.4 seconds
-Output:
 /** GitHub Actions -> Google Drive validation and immutable storage gateway. */
 
 const ROOT_FOLDER_ID = '1A6JFEZZqFfSkecTzPebZmgPZtRrN54rN';
