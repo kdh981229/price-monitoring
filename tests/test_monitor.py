@@ -1,3 +1,4 @@
+import inspect
 import unittest
 
 from datetime import datetime
@@ -84,6 +85,12 @@ class MonitorRulesTest(unittest.TestCase):
         error = source_error({"id": "naver"}, "홍삼보가", RuntimeError("HTTP Error 401: Unauthorized"), "search_fetch")
         self.assertEqual(error["category"], "configuration_error")
         self.assertEqual(error["classification"], "error")
+
+    def test_fetcher_allows_a_bounded_detail_timeout(self):
+        from src.monitor import Fetcher
+        fetcher = Fetcher({"timeout_seconds": 20, "retries": 2, "user_agent": "test"})
+        self.assertEqual(fetcher.timeout, 20)
+        self.assertIn("timeout", inspect.signature(Fetcher.get).parameters)
 
     def test_delayed_scheduled_run_creates_scheduler_error(self):
         now = datetime(2026, 8, 11, 3, 2, tzinfo=ZoneInfo("Asia/Seoul"))
