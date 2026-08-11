@@ -746,9 +746,14 @@ def main() -> int:
         }
         for source_id, item in result["source_statuses"].items()
     }
+    error_verification = [{
+        "source": item.get("source"), "stage": item.get("stage"), "category": item.get("category"),
+        "classification": item.get("classification"), "message": item.get("message"),
+    } for item in result["errors"]]
     print(json.dumps({
         "result": str(result_path), "briefing": str(briefing_path) if briefing_path else None,
         "summary": result["summary"], "source_verification": verification,
+        "error_verification": error_verification,
     }, ensure_ascii=False))
     return 0
 
