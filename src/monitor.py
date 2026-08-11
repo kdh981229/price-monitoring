@@ -16,7 +16,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -161,16 +161,19 @@ class Fetcher:
         self.retries = int(config["retries"])
         self.user_agent = config["user_agent"]
 
-    def get(self, url: str) -> HttpResult:
+    def get(self, url: str, *, headers: dict[str, str] | None = None, retries: int | None = None) -> HttpResult:
         last_error: Exception | None = None
-        for attempt in range(self.retries + 1):
+        attempts = self.retries if retries is None else retries
+        for attempt in range(attempts + 1):
+            request_headers = {
+                "User-Agent": self.user_agent,
+                "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.7",
+                "Accept": "text/html,application/xhtml+xml,application/json;q=0.8,*/*;q=0.5",
+            }
+            request_headers.update(headers or {})
             request = urllib.request.Request(
                 url,
-                headers={
-                    "User-Agent": self.user_agent,
-                    "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.7",
-                    "Accept": "text/html,application/xhtml+xml,application/json;q=0.8,*/*;q=0.5",
-                },
+                headers=request_headers,
             )
             try:
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
@@ -179,7 +182,7 @@ class Fetcher:
                     return HttpResult(response.geturl(), data.decode(charset, errors="replace"), response.status)
             except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
                 last_error = exc
-                if attempt < self.retries:
+                if attempt < attempts:
                     time.sleep(1.5 * (attempt + 1))
         raise RuntimeError(str(last_error))
 
@@ -207,6 +210,79 @@ def extract_candidates(page: HttpResult, source: dict[str, Any], limit: int) -> 
         if len(candidates) >= limit:
             break
     return candidates
+
+
+def naver_shopping_candidates(payload: dict[str, Any], page_url: str, limit: int) -> list[dict[str, Any]]:
+    """Map documented Naver Shopping fields without inspecting ambiguous surrounding HTML."""
+    candidates = []
+    for item in payload.get("items", [])[:limit]:
+        url = canonical_url(str(item.get("link") or ""), page_url) or str(item.get("link") or "")
+        title = visible_text(str(item.get("title") or ""))
+        mall = visible_text(str(item.get("mallName") or ""))
+        try:
+            price = int(str(item.get("lprice") or ""))
+        except ValueError:
+            price = None
+        if price is not None and price <= 0:
+            price = None
+        if not url or not title:
+            continue
+        candidates.append({
+            "url": url,
+            "title": title,
+            "context": f"판매몰 {mall}" if mall else "",
+            "metadata": {"company_name": mall or None, "metadata_source": "naver_shopping_api"},
+            "price_observation": {
+                "source": "naver", "collection_method": "naver_shopping_api",
+                "basis": "naver_shopping_lprice", "price_krw": price,
+                "shipping_status": "unknown", "actionable": price is not None,
+            },
+        })
+    return candidates
+
+
+def kakao_web_candidates(payload: dict[str, Any], page_url: str, limit: int) -> list[dict[str, Any]]:
+    """Daum Web API is discovery-only: it does not provide a seller-level price contract."""
+    candidates = []
+    for item in payload.get("documents", [])[:limit]:
+        url = canonical_url(str(item.get("url") or ""), page_url) or str(item.get("url") or "")
+        title = visible_text(str(item.get("title") or ""))
+        if url and title:
+            candidates.append({
+                "url": url, "title": title, "context": visible_text(str(item.get("contents") or "")),
+                "metadata": {"metadata_source": "kakao_web_api"},
+            })
+    return candidates
+
+
+def source_candidates(fetcher: Fetcher, source: dict[str, Any], query: str, limit: int) -> list[dict[str, Any]]:
+    """Source adapters keep price evidence contracts separate from broad discovery methods."""
+    method = source.get("collection_method", "public_html")
+    if method == "naver_shopping_api":
+        client_id = os.environ.get("NAVER_API_KEY_ID")
+        client_secret = os.environ.get("NAVER_API_KEY")
+        if not client_id or not client_secret:
+            raise RuntimeError("official API configuration missing: NAVER_API_KEY_ID or NAVER_API_KEY")
+        page = fetcher.get(source["url"].format(query=urllib.parse.quote(query), display=limit), headers={
+            "X-Naver-Client-Id": client_id, "X-Naver-Client-Secret": client_secret, "Accept": "application/json",
+        })
+        return naver_shopping_candidates(json.loads(page.body), page.url, limit)
+    if method == "kakao_web_api":
+        rest_key = os.environ.get("KAKAO_REST_API_KEY")
+        if not rest_key:
+            raise RuntimeError("official API configuration missing: KAKAO_REST_API_KEY")
+        page = fetcher.get(source["url"].format(query=urllib.parse.quote(query), size=limit), headers={
+            "Authorization": f"KakaoAK {rest_key}", "Accept": "application/json",
+        })
+        return kakao_web_candidates(json.loads(page.body), page.url, limit)
+    page = fetcher.get(source["url"].format(query=urllib.parse.quote(query)))
+    return extract_candidates(page, source, limit)
+
+
+def actionable_price(observations: list[dict[str, Any]]) -> int | None:
+    """Only an adapter with an explicit price contract may affect an automatic price alert."""
+    values = {int(item["price_krw"]) for item in observations if item.get("actionable") and item.get("price_krw") is not None}
+    return values.pop() if len(values) == 1 else None
 
 
 def flatten_jsonld(value: Any) -> list[dict[str, Any]]:
@@ -280,7 +356,7 @@ def seller_key(meta: dict[str, Any], url: str) -> str:
         meta.get("business_registration_number"), meta.get("phone"),
         meta.get("company_name"), meta.get("address"),
     ]
-    identity = "|".join(compact(str(v)) for v in values if v)
+    identity = "|".join(compact(str(v)) for v in values if v and v != "확인불가")
     if not identity:
         identity = urllib.parse.urlsplit(url).hostname or url
     return "seller-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
@@ -296,16 +372,54 @@ def seller_confidence(meta: dict[str, Any]) -> str:
     return "unknown"
 
 
+def confirmed_or_unavailable(value: Any) -> str:
+    return str(value).strip() if value else "확인불가"
+
+
+def load_seller_registry(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Load only human-verified seller records; an empty registry is a valid initial state."""
+    path = Path(str(config.get("seller_registry_path", "config/seller_registry.json")))
+    if not path.exists():
+        return []
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return [item for item in payload.get("records", []) if item.get("verification_status") == "verified"]
+
+
+def manual_seller_metadata(records: list[dict[str, Any]], url: str) -> dict[str, Any]:
+    """Exact URLs only: never infer a seller from a whole marketplace domain."""
+    canonical = canonical_url(url, url)
+    for record in records:
+        urls = [canonical_url(str(item), str(item)) for item in record.get("match_urls", [])]
+        if canonical and canonical in urls:
+            return {
+                "company_name": record.get("company_name"),
+                "representative_name": record.get("representative_name"),
+                "phone": record.get("public_phone"),
+                "address": record.get("business_address"),
+                "business_registration_number": record.get("public_business_registration_number"),
+                "seller_info_urls": record.get("verification_urls", record.get("match_urls", [])),
+                "seller_info_status": "manual_verified",
+                "metadata_source": "manual_registry",
+            }
+    return {}
+
+
 def source_error(source: dict[str, Any], query: str, exc: Exception, stage: str) -> dict[str, Any]:
     message = str(exc)
     category = "network_error"
-    if "403" in message or "429" in message:
+    classification = "pending"
+    if "official API configuration missing" in message:
+        category = "configuration_error"
+        classification = "error"
+    elif "403" in message or "429" in message:
         category = "access_limited"
+        if source["id"] in {"gmarket", "auction"} and "403" in message:
+            classification = "limitation"
     elif "timed out" in message.lower():
         category = "timeout"
     return {
         "source": source["id"], "query": query, "stage": stage,
-        "category": category, "message": message[:1000],
+        "category": category, "classification": classification, "message": message[:1000],
         "response": "다음 실행에서 재시도하고, 반복 시 Lessons.md의 해당 소스 대응 절차로 보완",
     }
 
@@ -318,6 +432,35 @@ def scheduled_slot_hour(config: dict[str, Any], now: datetime, explicit_slot: in
             raise ValueError(f"scheduled slot must be one of {hours}, got {explicit_slot}")
         return explicit_slot
     return max(hour for hour in hours if hour <= now.hour)
+
+
+def trigger_metadata(now: datetime, slot_hour: int, trigger_type: str, scheduled_minute: int | None,
+                     github_run_id: str | None, github_run_url: str | None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Record schedule provenance so a late execution is diagnosable, not guessed later."""
+    trigger: dict[str, Any] = {
+        "trigger_type": trigger_type or "manual",
+        "github_run_id": github_run_id or None,
+        "github_run_url": github_run_url or None,
+    }
+    incidents: list[dict[str, Any]] = []
+    if trigger_type != "schedule" or scheduled_minute is None:
+        return trigger, incidents
+    planned = now.replace(hour=slot_hour, minute=scheduled_minute, second=0, microsecond=0)
+    if planned > now:
+        planned -= timedelta(days=1)
+    lateness_minutes = max(0, int((now - planned).total_seconds() // 60))
+    trigger.update({
+        "scheduled_for_kst": planned.isoformat(),
+        "started_late_minutes": lateness_minutes,
+        "scheduled_minute_kst": scheduled_minute,
+    })
+    if lateness_minutes >= 10:
+        incidents.append({
+            "classification": "error", "scope": "scheduler", "status": "active",
+            "reason": f"예정 시각보다 {lateness_minutes}분 늦게 시작됨",
+            "next_action": "GitHub 예약 지연을 Watchdog에서 감시하고, 반복 시 외부 스케줄러를 검토",
+        })
+    return trigger, incidents
 
 
 def slot_already_archived(gateway_url: str, secret: str, now: datetime, slot_hour: int) -> bool:
@@ -339,8 +482,10 @@ def slot_already_archived(gateway_url: str, secret: str, now: datetime, slot_hou
     return bool(decoded.get("completed"))
 
 
-def collect(config: dict[str, Any], now: datetime, explicit_slot: int | None = None) -> dict[str, Any]:
+def collect(config: dict[str, Any], now: datetime, explicit_slot: int | None = None,
+            trigger: dict[str, Any] | None = None) -> dict[str, Any]:
     fetcher = Fetcher(config["collection"])
+    verified_sellers = load_seller_registry(config)
     errors: list[dict[str, Any]] = []
     merged: dict[str, dict[str, Any]] = {}
     source_status: dict[str, dict[str, Any]] = {}
@@ -349,11 +494,11 @@ def collect(config: dict[str, Any], now: datetime, explicit_slot: int | None = N
         for product in config["products"]:
             for query in product["queries"]:
                 attempted += 1
-                search_url = source["url"].format(query=urllib.parse.quote(query))
                 try:
-                    page = fetcher.get(search_url)
+                    candidates = source_candidates(
+                        fetcher, source, query, int(config["collection"]["max_candidates_per_query"])
+                    )
                     succeeded += 1
-                    candidates = extract_candidates(page, source, int(config["collection"]["max_candidates_per_query"]))
                 except Exception as exc:  # per-source failure is data, not a whole-run crash
                     errors.append(source_error(source, query, exc, "search_fetch"))
                     continue
@@ -366,51 +511,85 @@ def collect(config: dict[str, Any], now: datetime, explicit_slot: int | None = N
                     record = merged.setdefault(key, {
                         "url": key, "title": candidate["title"], "context": candidate["context"],
                         "product_id": matched["id"], "match_confidence": confidence,
-                        "seen_on": [], "queries": [], "search_prices": [],
+                        "seen_on": [], "queries": [], "price_observations": [], "search_metadata": {},
                     })
                     if source["id"] not in record["seen_on"]:
                         record["seen_on"].append(source["id"])
                     if query not in record["queries"]:
                         record["queries"].append(query)
-                    record["search_prices"] = sorted(set(record["search_prices"] + price_candidates(candidate["context"])))
-        source_status[source["id"]] = {
+                    observation = candidate.get("price_observation")
+                    if observation and observation not in record["price_observations"]:
+                        record["price_observations"].append(observation)
+                    record["search_metadata"].update({
+                        key: value for key, value in candidate.get("metadata", {}).items() if value
+                    })
+        status = "ok" if succeeded == attempted else ("partial" if succeeded else "failed")
+        status_record = {
             "queries_attempted": attempted, "queries_succeeded": succeeded,
             "matched_candidates": candidates_count,
-            "status": "ok" if succeeded == attempted else ("partial" if succeeded else "failed"),
+            "status": status,
+            "collection_method": source.get("collection_method", "public_html"),
         }
+        if status == "failed" and source["id"] in {"gmarket", "auction"}:
+            status_record["incident"] = {
+                "classification": "limitation",
+                "reason": "현재 public_html 직접 수집 방식에서 모든 검색 요청이 반복적으로 차단됨",
+                "next_action": "공식 API 또는 제휴 데이터 경로를 검토하고, 0건으로 판정하지 않음",
+            }
+        source_status[source["id"]] = status_record
 
     listings = []
     sellers: dict[str, dict[str, Any]] = {}
     detail_limit = int(config["collection"]["max_detail_pages_per_run"])
-    for index, candidate in enumerate(merged.values()):
-        meta: dict[str, Any] = {}
-        if index < detail_limit:
+    detail_interval = float(config["collection"].get("detail_request_interval_seconds", 2.0))
+    detail_attempts = 0
+    for candidate in merged.values():
+        meta: dict[str, Any] = dict(candidate.get("search_metadata", {}))
+        manual_meta = manual_seller_metadata(verified_sellers, candidate["url"])
+        product = next(p for p in config["products"] if p["id"] == candidate["product_id"])
+        observations = candidate["price_observations"]
+        preliminary_price = actionable_price(observations)
+        preliminary_status, _ = evaluate(product["policy"], candidate["url"], preliminary_price)
+        needs_enrichment = preliminary_status in {"critical", "warning", "review_required"}
+        if needs_enrichment and not manual_meta and detail_attempts < detail_limit:
             try:
-                detail = fetcher.get(candidate["url"])
-                meta = detail_metadata(detail)
+                # Detail requests are a bounded best-effort enrichment only. They never decide
+                # whether a price exposure was detected, and do not retry to avoid rate-limit bursts.
+                if detail_attempts:
+                    time.sleep(detail_interval)
+                detail = fetcher.get(candidate["url"], retries=0)
+                meta.update(detail_metadata(detail))
+                meta["seller_info_status"] = "public_page_observed"
+                detail_attempts += 1
             except Exception as exc:
+                detail_attempts += 1
+                classification = "error" if "429" in str(exc) else "pending"
                 errors.append({
                     "source": ",".join(candidate["seen_on"]), "url": candidate["url"],
-                    "stage": "listing_detail", "category": "detail_unavailable",
+                    "stage": "listing_detail", "category": "detail_unavailable", "classification": classification,
                     "message": str(exc)[:1000],
-                    "response": "검색 결과 증거는 보존하고 상세 URL은 다음 실행 또는 Codex 심층 분석에서 재검증",
+                    "response": "가격 탐지는 보존하고, 판매자 정보는 확인불가로 기록한다. 포털 상세 요청을 재시도하지 않는다.",
                 })
+        meta.update({key: value for key, value in manual_meta.items() if value})
         final_url = meta.get("final_url") or candidate["url"]
-        product = next(p for p in config["products"] if p["id"] == candidate["product_id"])
-        search_prices = candidate["search_prices"]
-        price = meta.get("price") or (min(search_prices) if search_prices else None)
-        shipping, shipping_status = shipping_from(candidate["context"] + " " + meta.get("page_text", ""))
+        # Detail-page prices can be coupon/member/option prices. They enrich seller identity only.
+        price = actionable_price(observations)
+        shipping = None
+        shipping_status = "unknown"
         status, reason = evaluate(product["policy"], final_url, price)
         sid = seller_key(meta, final_url)
         sellers.setdefault(sid, {
             "seller_id": sid,
-            "company_name": meta.get("company_name"),
-            "representative_name": meta.get("representative_name"),
-            "public_phone": meta.get("phone"),
-            "business_address": meta.get("address"),
-            "public_business_registration_number": meta.get("business_registration_number"),
-            "seller_info_urls": [final_url],
+            "company_name": confirmed_or_unavailable(meta.get("company_name")),
+            "representative_name": confirmed_or_unavailable(meta.get("representative_name")),
+            "public_phone": confirmed_or_unavailable(meta.get("phone")),
+            "business_address": confirmed_or_unavailable(meta.get("address")),
+            "public_business_registration_number": confirmed_or_unavailable(meta.get("business_registration_number")),
+            "seller_info_urls": meta.get("seller_info_urls") or [final_url],
             "identity_confidence": seller_confidence(meta),
+            "seller_info_status": meta.get("seller_info_status") or (
+                "search_result_observed" if meta.get("company_name") else "unavailable"
+            ),
         })
         listing_id = "listing-" + hashlib.sha256(final_url.encode("utf-8")).hexdigest()[:16]
         listings.append({
@@ -419,6 +598,7 @@ def collect(config: dict[str, Any], now: datetime, explicit_slot: int | None = N
             "final_url": final_url, "seen_on": sorted(candidate["seen_on"]),
             "matched_queries": sorted(candidate["queries"]), "match_confidence": candidate["match_confidence"],
             "seller_id": sid, "displayed_price_krw": price,
+            "price_observations": observations,
             "shipping_fee_krw": shipping, "shipping_status": shipping_status,
             "price_display": display_price(price, shipping, shipping_status),
             "rule_status": status, "rule_reason": reason,
@@ -431,14 +611,19 @@ def collect(config: dict[str, Any], now: datetime, explicit_slot: int | None = N
         counts[item["rule_status"]] = counts.get(item["rule_status"], 0) + 1
     run_id = now.strftime("run-%Y%m%dT%H%M%S%z")
     slot_hour = scheduled_slot_hour(config, now, explicit_slot)
+    run_trigger, incidents = trigger_metadata(
+        now, slot_hour, (trigger or {}).get("trigger_type", "manual"),
+        (trigger or {}).get("scheduled_minute_kst"), (trigger or {}).get("github_run_id"),
+        (trigger or {}).get("github_run_url"),
+    )
     return {
         "schema_version": "1.0", "record_type": "immutable_scan_run",
         "run": {
             "run_id": run_id, "started_at": now.isoformat(), "completed_at": datetime.now(ZoneInfo(config["timezone"])).isoformat(),
-            "timezone": config["timezone"], "scheduled_slot_hour_kst": slot_hour,
+            "timezone": config["timezone"], "scheduled_slot_hour_kst": slot_hour, "trigger": run_trigger,
         },
         "rules_snapshot": config["products"], "source_statuses": source_status,
-        "listings": listings, "sellers": list(sellers.values()), "errors": errors,
+        "listings": listings, "sellers": list(sellers.values()), "errors": errors, "incidents": incidents,
         "summary": {"listing_count": len(listings), "seller_count": len(sellers), "error_count": len(errors), "rule_counts": counts},
     }
 
@@ -516,6 +701,10 @@ def main() -> int:
                         help="Intended KST schedule slot supplied by GitHub Actions; preserves 08시 briefing on delayed starts.")
     parser.add_argument("--skip-if-slot-exists", action="store_true",
                         help="Exit successfully when the Drive gateway already has this date and schedule slot.")
+    parser.add_argument("--trigger-type", default="manual", choices=("manual", "schedule"))
+    parser.add_argument("--scheduled-minute-kst", type=int, choices=(7, 17))
+    parser.add_argument("--github-run-id")
+    parser.add_argument("--github-run-url")
     parser.add_argument("--no-upload", action="store_true")
     args = parser.parse_args()
     config = json.loads(Path(args.config).read_text(encoding="utf-8"))
@@ -531,7 +720,12 @@ def main() -> int:
             return 0
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    result = collect(config, now, intended_slot)
+    result = collect(config, now, intended_slot, {
+        "trigger_type": args.trigger_type,
+        "scheduled_minute_kst": args.scheduled_minute_kst,
+        "github_run_id": args.github_run_id,
+        "github_run_url": args.github_run_url,
+    })
     result_path = output_dir / f"{result['run']['run_id']}.json"
     result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     is_briefing_slot = result["run"]["scheduled_slot_hour_kst"] == int(config["briefing_hour_kst"])
@@ -551,4 +745,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
