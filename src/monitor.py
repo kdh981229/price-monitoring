@@ -161,9 +161,13 @@ class Fetcher:
         self.retries = int(config["retries"])
         self.user_agent = config["user_agent"]
 
-    def get(self, url: str, *, headers: dict[str, str] | None = None, retries: int | None = None) -> HttpResult:
+    def get(
+        self, url: str, *, headers: dict[str, str] | None = None,
+        retries: int | None = None, timeout: int | None = None,
+    ) -> HttpResult:
         last_error: Exception | None = None
         attempts = self.retries if retries is None else retries
+        request_timeout = self.timeout if timeout is None else timeout
         for attempt in range(attempts + 1):
             request_headers = {
                 "User-Agent": self.user_agent,
@@ -176,7 +180,7 @@ class Fetcher:
                 headers=request_headers,
             )
             try:
-                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                with urllib.request.urlopen(request, timeout=request_timeout) as response:
                     data = response.read(5_000_000)
                     charset = response.headers.get_content_charset() or "utf-8"
                     return HttpResult(response.geturl(), data.decode(charset, errors="replace"), response.status)
@@ -547,6 +551,7 @@ def collect(config: dict[str, Any], now: datetime, explicit_slot: int | None = N
     sellers: dict[str, dict[str, Any]] = {}
     detail_limit = int(config["collection"]["max_detail_pages_per_run"])
     detail_interval = float(config["collection"].get("detail_request_interval_seconds", 2.0))
+    detail_timeout = int(config["collection"].get("detail_timeout_seconds", 6))
     detail_attempts = 0
     for candidate in merged.values():
         meta: dict[str, Any] = dict(candidate.get("search_metadata", {}))
@@ -562,7 +567,7 @@ def collect(config: dict[str, Any], now: datetime, explicit_slot: int | None = N
                 # whether a price exposure was detected, and do not retry to avoid rate-limit bursts.
                 if detail_attempts:
                     time.sleep(detail_interval)
-                detail = fetcher.get(candidate["url"], retries=0)
+                detail = fetcher.get(candidate["url"], retries=0, timeout=detail_timeout)
                 meta.update(detail_metadata(detail))
                 meta["seller_info_status"] = "public_page_observed"
                 detail_attempts += 1
