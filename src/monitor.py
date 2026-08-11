@@ -739,7 +739,17 @@ def main() -> int:
         if not gateway or not secret:
             raise RuntimeError("DRIVE_WEBHOOK_URL and DRIVE_SHARED_SECRET GitHub secrets are required")
         post_to_drive(gateway, secret, result_path, briefing_path)
-    print(json.dumps({"result": str(result_path), "briefing": str(briefing_path) if briefing_path else None, "summary": result["summary"]}, ensure_ascii=False))
+    verification = {
+        source_id: {
+            "status": item["status"], "collection_method": item["collection_method"],
+            "queries_succeeded": item["queries_succeeded"], "queries_attempted": item["queries_attempted"],
+        }
+        for source_id, item in result["source_statuses"].items()
+    }
+    print(json.dumps({
+        "result": str(result_path), "briefing": str(briefing_path) if briefing_path else None,
+        "summary": result["summary"], "source_verification": verification,
+    }, ensure_ascii=False))
     return 0
 
 
