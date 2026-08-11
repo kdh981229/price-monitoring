@@ -80,6 +80,11 @@ class MonitorRulesTest(unittest.TestCase):
         error = source_error({"id": "gmarket"}, "홍삼보가", RuntimeError("HTTP Error 403"), "search_fetch")
         self.assertEqual(error["classification"], "limitation")
 
+    def test_naver_401_is_configuration_error(self):
+        error = source_error({"id": "naver"}, "홍삼보가", RuntimeError("HTTP Error 401: Unauthorized"), "search_fetch")
+        self.assertEqual(error["category"], "configuration_error")
+        self.assertEqual(error["classification"], "error")
+
     def test_delayed_scheduled_run_creates_scheduler_error(self):
         now = datetime(2026, 8, 11, 3, 2, tzinfo=ZoneInfo("Asia/Seoul"))
         trigger, incidents = trigger_metadata(now, 0, "schedule", 7, "123", "https://example.com/run/123")
