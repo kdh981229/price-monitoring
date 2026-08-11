@@ -29,9 +29,16 @@ jobs:
       TZ: Asia/Seoul
       DRIVE_WEBHOOK_URL: ${{ secrets.DRIVE_WEBHOOK_URL }}
       DRIVE_SHARED_SECRET: ${{ secrets.DRIVE_SHARED_SECRET }}
+      NAVER_API_KEY_ID: ${{ secrets.NAVER_API_KEY_ID }}
+      NAVER_API_KEY: ${{ secrets.NAVER_API_KEY }}
+      KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
+      GITHUB_EVENT_NAME: ${{ github.event_name }}
+      GITHUB_RUN_ID: ${{ github.run_id }}
+      GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       # GitHub가 실제 시작을 지연해도, 원래 예정된 08시 회차는 08시 브리핑으로 처리한다.
       SCHEDULED_SLOT_HOUR_KST: ${{ (github.event.schedule == '7 23 * * *' || github.event.schedule == '17 23 * * *') && '8' || (github.event.schedule == '7 19 * * *' || github.event.schedule == '17 19 * * *') && '4' || (github.event.schedule == '7 15 * * *' || github.event.schedule == '17 15 * * *') && '0' || (github.event.schedule == '7 11 * * *' || github.event.schedule == '17 11 * * *') && '20' || (github.event.schedule == '7 7 * * *' || github.event.schedule == '17 7 * * *') && '16' || (github.event.schedule == '7 3 * * *' || github.event.schedule == '17 3 * * *') && '12' || '' }}
       IS_FALLBACK: ${{ startsWith(github.event.schedule, '17 ') && 'true' || 'false' }}
+      SCHEDULED_MINUTE_KST: ${{ startsWith(github.event.schedule, '17 ') && '17' || (github.event_name == 'schedule' && '7' || '') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -43,6 +50,8 @@ jobs:
           args=()
           if [[ "${{ inputs.force_briefing }}" == "true" ]]; then args+=(--force-briefing); fi
           if [[ -n "$SCHEDULED_SLOT_HOUR_KST" ]]; then args+=(--scheduled-slot-hour "$SCHEDULED_SLOT_HOUR_KST"); fi
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then args+=(--trigger-type schedule --scheduled-minute-kst "$SCHEDULED_MINUTE_KST"); fi
+          args+=(--github-run-id "$GITHUB_RUN_ID" --github-run-url "$GITHUB_RUN_URL")
           if [[ "$IS_FALLBACK" == "true" ]]; then args+=(--skip-if-slot-exists); fi
           python src/monitor.py "${args[@]}"
       - name: Preserve run artifact for diagnosis
@@ -53,4 +62,3 @@ jobs:
           path: out/
           if-no-files-found: warn
           retention-days: 30
-
