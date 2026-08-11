@@ -85,6 +85,7 @@
     "retries": 2,
     "max_candidates_per_query": 12,
     "max_detail_pages_per_run": 12,
+    "detail_timeout_seconds": 6,
     "detail_request_interval_seconds": 2.0,
     "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/127.0 Safari/537.36 PriceMonitoring/1.0"
   },
