@@ -411,6 +411,11 @@ def source_error(source: dict[str, Any], query: str, exc: Exception, stage: str)
     if "official API configuration missing" in message:
         category = "configuration_error"
         classification = "error"
+    elif source["id"] == "naver" and "401" in message:
+        # A documented API endpoint returning 401 means the deployed credential
+        # pair/app registration is invalid, not a marketplace access limitation.
+        category = "configuration_error"
+        classification = "error"
     elif "403" in message or "429" in message:
         category = "access_limited"
         if source["id"] in {"gmarket", "auction"} and "403" in message:
