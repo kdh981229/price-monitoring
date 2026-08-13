@@ -320,6 +320,35 @@ def scheduled_slot_hour(config: dict[str, Any], now: datetime, explicit_slot: in
     return max(hour for hour in hours if hour <= now.hour)
 
 
+RETRYABLE_DRIVE_STATUS = {404, 408, 429, 500, 502, 503, 504}
+
+
+def post_drive_gateway(url: str, payload: dict[str, Any], timeout: int) -> dict[str, Any]:
+    """Post an idempotent Drive-gateway payload, retrying one transient failure only."""
+    request = urllib.request.Request(
+        url, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    for attempt in range(2):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                body = response.read().decode("utf-8", errors="replace")
+                if response.status >= 300:
+                    raise RuntimeError(f"Drive gateway HTTP {response.status}: {body[:1000]}")
+                decoded = json.loads(body)
+                if not isinstance(decoded, dict):
+                    raise RuntimeError("Drive gateway returned a non-object response")
+                return decoded
+        except urllib.error.HTTPError as exc:
+            if attempt or exc.code not in RETRYABLE_DRIVE_STATUS:
+                raise RuntimeError(f"Drive gateway HTTP {exc.code}: {exc.reason}") from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            if attempt:
+                raise RuntimeError(f"Drive gateway request failed: {exc}") from exc
+        time.sleep(5)
+    raise AssertionError("unreachable")
+
+
 def slot_already_archived(gateway_url: str, secret: str, now: datetime, slot_hour: int) -> bool:
     """Ask the Drive gateway whether the intended KST slot already completed."""
     payload = {
@@ -328,12 +357,7 @@ def slot_already_archived(gateway_url: str, secret: str, now: datetime, slot_hou
         "date": now.strftime("%Y-%m-%d"),
         "scheduled_slot_hour_kst": slot_hour,
     }
-    request = urllib.request.Request(
-        gateway_url, data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        decoded = json.loads(response.read().decode("utf-8", errors="replace"))
+    decoded = post_drive_gateway(gateway_url, payload, timeout=30)
     if not decoded.get("ok"):
         raise RuntimeError(f"Drive gateway slot status failed: {decoded.get('error', 'unknown error')}")
     return bool(decoded.get("completed"))
@@ -494,17 +518,9 @@ def post_to_drive(url: str, secret: str, result_path: Path, briefing_path: Path 
             "briefing_base64": base64.b64encode(briefing_raw).decode("ascii"),
             "briefing_sha256": hashlib.sha256(briefing_raw).hexdigest(),
         })
-    request = urllib.request.Request(
-        url, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=60) as response:
-        body = response.read().decode("utf-8", errors="replace")
-        if response.status >= 300:
-            raise RuntimeError(f"Drive gateway HTTP {response.status}: {body[:1000]}")
-        decoded = json.loads(body)
-        if not decoded.get("ok"):
-            raise RuntimeError(f"Drive gateway rejected payload: {body[:1000]}")
+    decoded = post_drive_gateway(url, payload, timeout=60)
+    if not decoded.get("ok"):
+        raise RuntimeError(f"Drive gateway rejected payload: {json.dumps(decoded, ensure_ascii=False)[:1000]}")
 
 
 def main() -> int:
