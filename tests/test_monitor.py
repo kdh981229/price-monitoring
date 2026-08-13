@@ -1,9 +1,12 @@
+import urllib.error
 import unittest
+
+from unittest.mock import MagicMock, patch
 
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from src.monitor import canonical_url, classify_product, display_price, evaluate, scheduled_slot_hour
+from src.monitor import canonical_url, classify_product, display_price, evaluate, post_drive_gateway, scheduled_slot_hour
 
 
 PRODUCTS = [
@@ -41,6 +44,21 @@ class MonitorRulesTest(unittest.TestCase):
     def test_tracking_parameters_are_removed(self):
         url = canonical_url("https://shop.example/item/1?utm_source=x&item=2", "https://example.com")
         self.assertEqual(url, "https://shop.example/item/1?item=2")
+
+    @patch("src.monitor.time.sleep")
+    @patch("src.monitor.urllib.request.urlopen")
+    def test_drive_gateway_retries_one_transient_404(self, urlopen, sleep):
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = b'{"ok": true}'
+        response.status = 200
+        urlopen.side_effect = [
+            urllib.error.HTTPError("https://example.test", 404, "Not Found", None, None),
+            response,
+        ]
+        self.assertEqual(post_drive_gateway("https://example.test", {"action": "slot_status"}, 30), {"ok": True})
+        self.assertEqual(urlopen.call_count, 2)
+        sleep.assert_called_once_with(5)
 
     def test_delayed_08_schedule_keeps_08_slot(self):
         config = {"schedule_hours_kst": [0, 4, 8, 12, 16, 20]}
