@@ -11,6 +11,7 @@
 | `history/YYYY/MM/DD` | 실행별 원본 JSON | GitHub Actions → Apps Script | 불변 원본 |
 | `current/latest.json` | 최신 원본의 ID·URL·해시 | Apps Script | 갱신 가능한 포인터 |
 | `briefings/YYYY/MM` | 08시 규칙 기반 기본 브리핑 | GitHub Actions → Apps Script | 기계 1차 자료 |
+| `analysis-input/YYYY/MM` | 당일 수집 결과를 정규화한 AI용 단일 입력 문서 | GitHub Actions → Apps Script | 최근 3일 대조용 |
 | `final-briefings/YYYY/MM` | 심층 검증·보완·출력용 최종 브리핑 | Codex | 사람용 최종본 |
 | `lessons` | 오류 원인과 대응책 | Codex | 누적 운영 지식 |
 
@@ -22,8 +23,9 @@
 2. 수집기는 상품명을 분류하고 가격 규칙을 적용해 원본 JSON을 만듭니다.
 3. Apps Script가 공유 비밀값, JSON 구조, 실행 ID, SHA-256을 검증합니다.
 4. 검증된 JSON을 실행별 불변 파일로 Drive `history`에 저장하고 `current/latest.json` 포인터만 갱신합니다.
-5. 08시 회차에는 규칙 기반 기본 브리핑을 `briefings`에 함께 저장합니다.
-6. Codex Sol/high가 원본·오류·Lessons를 심층 분석해 `final-briefings`에 별도 최종본을 작성합니다.
+5. 08시 회차에는 규칙 기반 기본 브리핑과 AI용 통합 입력 문서를 각각 `briefings`, `analysis-input`에 저장합니다.
+6. 2차 분석 AI는 `analysis-input`의 최근 3일 문서를 우선 대조하고, 식별 충돌 등 예외가 있을 때만 원본을 추가 확인합니다.
+7. 최종 분석 결과는 `final-briefings`에 별도 최종본으로 작성합니다.
 
 동일 이름의 불변 원본이 이미 있고 해시가 다르면 Apps Script가 저장을 거부하므로 조용한 덮어쓰기가 발생하지 않습니다.
 
@@ -35,7 +37,7 @@
 4. GitHub 저장소 `Settings → Secrets and variables → Actions`에 다음 저장소 비밀값을 추가합니다.
    - `DRIVE_WEBHOOK_URL`: 배포된 Apps Script 웹 앱 `/exec` URL
    - `DRIVE_SHARED_SECRET`: Apps Script의 `SHARED_SECRET`과 같은 값
-5. Actions에서 `Collect price exposure`를 수동 실행하고 Drive의 `history`, `current`, `briefings` 생성을 확인합니다.
+5. Actions에서 `Collect price exposure`를 `force_briefing`과 함께 수동 실행하고 Drive의 `history`, `current`, `briefings`, `analysis-input` 생성을 확인합니다.
 6. 성공 확인 뒤 `.github/workflows/collect.yml`의 `schedule` 주석을 해제합니다.
 
 GitHub cron은 UTC 기준 `0 3,7,11,15,19,23 * * *`이며 한국시간 12·16·20·00·04·08시에 해당합니다. 예약 실행은 혼잡 시 수분 지연될 수 있지만 결과의 `scheduled_slot_hour_kst`는 해당 4시간 구간으로 기록됩니다.
