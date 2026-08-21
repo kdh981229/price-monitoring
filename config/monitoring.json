@@ -1,7 +1,14 @@
 {
   "schema_version": "1.0",
   "timezone": "Asia/Seoul",
-  "schedule_hours_kst": [0, 4, 8, 12, 16, 20],
+  "schedule_hours_kst": [
+    0,
+    4,
+    8,
+    12,
+    16,
+    20
+  ],
   "briefing_hour_kst": 8,
   "sources": [
     {
@@ -26,30 +33,53 @@
       "id": "11st",
       "name": "11번가",
       "url": "https://search.11st.co.kr/Search.tmall?kwd={query}",
-      "allowed_domains": ["11st.co.kr"]
+      "allowed_domains": [
+        "11st.co.kr"
+      ]
     },
     {
       "id": "gmarket",
       "name": "G마켓",
       "url": "https://browse.gmarket.co.kr/search?keyword={query}",
-      "allowed_domains": ["gmarket.co.kr"]
+      "allowed_domains": [
+        "gmarket.co.kr"
+      ]
     },
     {
       "id": "auction",
       "name": "옥션",
       "url": "https://browse.auction.co.kr/search?keyword={query}",
-      "allowed_domains": ["auction.co.kr"]
+      "allowed_domains": [
+        "auction.co.kr"
+      ]
     }
   ],
   "products": [
     {
       "id": "hong-sam-bon-jeong",
       "name": "정관장 홍삼본정",
-      "queries": ["정관장 홍삼본정", "홍삼본정", "본정"],
-      "strong_phrases": ["정관장홍삼본정", "홍삼본정"],
-      "weak_terms": ["본정"],
-      "context_terms": ["정관장", "홍삼"],
-      "exclude_terms": ["본정스틱", "본정 데일리스틱", "본정액", "본정환"],
+      "queries": [
+        "정관장 홍삼본정",
+        "홍삼본정",
+        "본정"
+      ],
+      "strong_phrases": [
+        "정관장홍삼본정",
+        "홍삼본정"
+      ],
+      "weak_terms": [
+        "본정"
+      ],
+      "context_terms": [
+        "정관장",
+        "홍삼"
+      ],
+      "exclude_terms": [
+        "본정스틱",
+        "본정 데일리스틱",
+        "본정액",
+        "본정환"
+      ],
       "policy": {
         "type": "exposure_prohibited_except_allowlist",
         "allowlist_urls": [],
@@ -59,10 +89,22 @@
     {
       "id": "hong-sam-bo-ga",
       "name": "정관장 홍삼보가",
-      "queries": ["정관장 홍삼보가", "홍삼보가", "보가"],
-      "strong_phrases": ["정관장홍삼보가", "홍삼보가"],
-      "weak_terms": ["보가"],
-      "context_terms": ["정관장", "홍삼"],
+      "queries": [
+        "정관장 홍삼보가",
+        "홍삼보가",
+        "보가"
+      ],
+      "strong_phrases": [
+        "정관장홍삼보가",
+        "홍삼보가"
+      ],
+      "weak_terms": [
+        "보가"
+      ],
+      "context_terms": [
+        "정관장",
+        "홍삼"
+      ],
       "exclude_terms": [],
       "policy": {
         "type": "minimum_display_price",
@@ -85,12 +127,20 @@
       "immutable_runs": "history/{yyyy}/{mm}/{dd}",
       "basic_briefings": "briefings/{yyyy}/{mm}",
       "final_briefings": "final-briefings/{yyyy}/{mm}",
-      "lessons": "lessons"
+      "lessons": "lessons",
+      "analysis_inputs": "analysis-input/{yyyy}/{mm}"
     },
     "write_ownership": {
-      "github_actions": ["current", "history", "briefings"],
-      "codex": ["final-briefings", "lessons"]
+      "github_actions": [
+        "current",
+        "history",
+        "briefings",
+        "analysis-input"
+      ],
+      "codex": [
+        "final-briefings",
+        "lessons"
+      ]
     }
   }
 }
-

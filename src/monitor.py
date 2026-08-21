@@ -498,11 +498,137 @@ def basic_briefing(result: dict[str, Any]) -> str:
             lines.append(f"- `{error.get('source', 'unknown')}` / `{error.get('stage')}` / {error.get('category')}: {error.get('message')}")
     else:
         lines.append("- 기록된 수집 오류 없음")
-    lines += ["", "## 후속 처리", "", "- Codex Sol/high가 원본 JSON, 오류 기록, Lessons.md를 대조한 뒤 `final-briefings`에 별도 최종본을 생성합니다.", ""]
+    lines += ["", "## 후속 처리", "", "- 2차 분석 AI는 `analysis-input`의 최근 3일 통합 문서를 우선 대조하고, 예외 확인이 필요할 때만 원본을 추가 조회합니다.", ""]
     return "\n".join(lines)
 
 
-def post_to_drive(url: str, secret: str, result_path: Path, briefing_path: Path | None) -> None:
+def markdown_cell(value: Any) -> str:
+    """Keep generated Markdown tables readable without changing source data."""
+    if value is None or value == "":
+        return "확인불가"
+    return re.sub(r"\s+", " ", str(value)).replace("|", "\\|")
+
+
+def analysis_input(result: dict[str, Any]) -> str:
+    """Build one compact, deterministic daily input for the second-pass AI analysis."""
+    run = result["run"]
+    summary = result["summary"]
+    sellers = {item["seller_id"]: item for item in result["sellers"]}
+    lines = [
+        f"# {run['started_at'][:10]} AI 가격 분석 입력",
+        "",
+        "> GitHub Actions가 당일 08시 수집 결과를 분석용으로 정규화한 자료입니다.",
+        "> 수집 실패·부분 성공은 상품 없음으로 해석하지 말고, 최종 판단에는 아래 상태와 신뢰도를 함께 반영하십시오.",
+        "",
+        "## 실행 정보",
+        "",
+        f"- 실행 ID: `{run['run_id']}`",
+        f"- 수집 시작: `{run['started_at']}`",
+        f"- 예정 회차: `{run['scheduled_slot_hour_kst']:02d}:00 KST`",
+        f"- 탐지 URL: {summary['listing_count']}건 / 판매자 레코드: {summary['seller_count']}건 / 수집 오류: {summary['error_count']}건",
+        f"- 판정: 치명 {summary['rule_counts'].get('critical', 0)}, 확인 필요 {summary['rule_counts'].get('review_required', 0)}, 경고 {summary['rule_counts'].get('warning', 0)}, 정상 {summary['rule_counts'].get('normal', 0)}, 허용 예외 {summary['rule_counts'].get('allowed_exception', 0)}",
+        "",
+        "## 채널별 수집 상태",
+        "",
+        "| 채널 | 상태 | 수집 방식 | 성공/시도 검색 | 탐지 후보 | 장애 성격 |",
+        "|---|---|---|---:|---:|---|",
+    ]
+    for source_id, status in result["source_statuses"].items():
+        incident = status.get("incident") or {}
+        lines.append(
+            f"| {markdown_cell(source_id)} | {markdown_cell(status.get('status'))} | "
+            f"{markdown_cell(status.get('collection_method'))} | "
+            f"{status.get('queries_succeeded', 0)}/{status.get('queries_attempted', 0)} | "
+            f"{status.get('matched_candidates', 0)} | {markdown_cell(incident.get('classification') or '-')} |"
+        )
+
+    lines += [
+        "",
+        "## 상품 노출",
+        "",
+        "| 상품 키 | 판정 | 상품 | 표기가격 | 판매자 키 | 판매자 | 판매자 신뢰도 | 노출 채널 | URL |",
+        "|---|---|---|---:|---|---|---|---|---|",
+    ]
+    for item in result["listings"]:
+        seller = sellers.get(item["seller_id"], {})
+        lines.append(
+            f"| `{markdown_cell(item.get('listing_id'))}` | {markdown_cell(item.get('rule_status'))} | "
+            f"{markdown_cell(item.get('title'))} | {markdown_cell(item.get('price_display'))} | "
+            f"`{markdown_cell(item.get('seller_id'))}` | {markdown_cell(seller.get('company_name'))} | "
+            f"{markdown_cell(seller.get('identity_confidence'))} | {markdown_cell(', '.join(item.get('seen_on', [])))} | "
+            f"[원본]({item.get('final_url')}) |"
+        )
+    if not result["listings"]:
+        lines.append("| - | 판단 유보 | 탐지 결과 없음(채널별 수집 상태 확인 필요) | - | - | - | - | - | - |")
+
+    lines += [
+        "",
+        "## 판매자 식별 자료",
+        "",
+        "| 판매자 키 | 상호 | 대표자 | 사업자등록번호 | 전화번호 | 식별 상태 | 신뢰도 |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for seller in result["sellers"]:
+        lines.append(
+            f"| `{markdown_cell(seller.get('seller_id'))}` | {markdown_cell(seller.get('company_name'))} | "
+            f"{markdown_cell(seller.get('representative_name'))} | "
+            f"{markdown_cell(seller.get('public_business_registration_number'))} | "
+            f"{markdown_cell(seller.get('public_phone'))} | {markdown_cell(seller.get('seller_info_status'))} | "
+            f"{markdown_cell(seller.get('identity_confidence'))} |"
+        )
+    if not result["sellers"]:
+        lines.append("| - | 확인불가 | 확인불가 | 확인불가 | 확인불가 | unavailable | none |")
+
+    lines += ["", "## 적용 가격 규칙", ""]
+    for product in result["rules_snapshot"]:
+        policy = product["policy"]
+        if policy["type"] == "minimum_display_price":
+            rule = f"정상 하한 {int(policy['normal_min_krw']):,}원 / 치명 하한 {int(policy['critical_below_krw']):,}원"
+        else:
+            rule = f"허용 목록 외 노출 금지 / 등록된 허용 URL {len(policy.get('allowlist_urls', []))}개"
+        lines.append(f"- `{markdown_cell(product.get('id'))}` {markdown_cell(product.get('name'))}: {rule}")
+
+    lines += ["", "## 오류 및 수집 공백", ""]
+    if result["errors"]:
+        for error in result["errors"]:
+            lines.append(
+                f"- 채널 `{markdown_cell(error.get('source'))}` / 단계 `{markdown_cell(error.get('stage'))}` / "
+                f"분류 `{markdown_cell(error.get('category'))}`·`{markdown_cell(error.get('classification'))}`: "
+                f"{markdown_cell(error.get('message'))}"
+            )
+    else:
+        lines.append("- 기록된 수집 오류 없음")
+
+    lines += ["", "## 실행 사고", ""]
+    if result.get("incidents"):
+        for incident in result["incidents"]:
+            lines.append(
+                f"- `{markdown_cell(incident.get('scope'))}` / `{markdown_cell(incident.get('classification'))}`: "
+                f"{markdown_cell(incident.get('reason'))}"
+            )
+    else:
+        lines.append("- 기록된 실행 사고 없음")
+
+    lines += [
+        "",
+        "## 2차 분석 지침",
+        "",
+        "- 최근 3일의 이 폴더 내 동일 형식 문서만 기본 입력으로 사용합니다.",
+        "- `listing_id`, `seller_id`, URL과 판매자 신뢰도를 함께 사용해 동일 상품·판매자를 대조합니다.",
+        "- `failed` 또는 `partial` 채널은 위반 없음이나 상품 삭제로 단정하지 않습니다.",
+        "- 원본 JSON은 식별 충돌, 급격한 가격 변동 등 예외를 확인해야 할 때만 추가로 조회합니다.",
+        "",
+        "## 원본 참조",
+        "",
+        f"- 원본 실행 JSON: `history/{run['started_at'][:4]}/{run['started_at'][5:7]}/{run['started_at'][8:10]}/{run['run_id']}.json`",
+        f"- 기본 브리핑: `briefings/{run['started_at'][:4]}/{run['started_at'][5:7]}/{run['started_at'][:10]}_08시_기본_브리핑.md`",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def post_to_drive(url: str, secret: str, result_path: Path, briefing_path: Path | None,
+                  analysis_input_path: Path | None = None) -> None:
     raw = result_path.read_bytes()
     payload: dict[str, Any] = {
         "secret": secret,
@@ -517,6 +643,13 @@ def post_to_drive(url: str, secret: str, result_path: Path, briefing_path: Path 
             "briefing_name": briefing_path.name,
             "briefing_base64": base64.b64encode(briefing_raw).decode("ascii"),
             "briefing_sha256": hashlib.sha256(briefing_raw).hexdigest(),
+        })
+    if analysis_input_path:
+        analysis_raw = analysis_input_path.read_bytes()
+        payload.update({
+            "analysis_input_name": analysis_input_path.name,
+            "analysis_input_base64": base64.b64encode(analysis_raw).decode("ascii"),
+            "analysis_input_sha256": hashlib.sha256(analysis_raw).hexdigest(),
         })
     decoded = post_drive_gateway(url, payload, timeout=60)
     if not decoded.get("ok"):
@@ -552,16 +685,19 @@ def main() -> int:
     result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     is_briefing_slot = result["run"]["scheduled_slot_hour_kst"] == int(config["briefing_hour_kst"])
     briefing_path = None
+    analysis_input_path = None
     if args.force_briefing or is_briefing_slot:
         briefing_path = output_dir / f"{now:%Y-%m-%d}_08시_기본_브리핑.md"
         briefing_path.write_text(basic_briefing(result), encoding="utf-8")
+        analysis_input_path = output_dir / f"{now:%Y-%m-%d}_AI_가격분석_입력.md"
+        analysis_input_path.write_text(analysis_input(result), encoding="utf-8")
     if not args.no_upload:
         gateway = os.environ.get("DRIVE_WEBHOOK_URL")
         secret = os.environ.get("DRIVE_SHARED_SECRET")
         if not gateway or not secret:
             raise RuntimeError("DRIVE_WEBHOOK_URL and DRIVE_SHARED_SECRET GitHub secrets are required")
-        post_to_drive(gateway, secret, result_path, briefing_path)
-    print(json.dumps({"result": str(result_path), "briefing": str(briefing_path) if briefing_path else None, "summary": result["summary"]}, ensure_ascii=False))
+        post_to_drive(gateway, secret, result_path, briefing_path, analysis_input_path)
+    print(json.dumps({"result": str(result_path), "briefing": str(briefing_path) if briefing_path else None, "analysis_input": str(analysis_input_path) if analysis_input_path else None, "summary": result["summary"]}, ensure_ascii=False))
     return 0
 
 
