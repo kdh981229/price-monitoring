@@ -1,12 +1,15 @@
+import json
+import tempfile
 import urllib.error
 import unittest
 
 from unittest.mock import MagicMock, patch
 
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from src.monitor import canonical_url, classify_product, display_price, evaluate, post_drive_gateway, scheduled_slot_hour
+from src.monitor import analysis_input, canonical_url, classify_product, display_price, evaluate, post_drive_gateway, post_to_drive, scheduled_slot_hour
 
 
 PRODUCTS = [
@@ -64,6 +67,63 @@ class MonitorRulesTest(unittest.TestCase):
         config = {"schedule_hours_kst": [0, 4, 8, 12, 16, 20]}
         delayed_start = datetime(2026, 8, 7, 9, 30, tzinfo=ZoneInfo("Asia/Seoul"))
         self.assertEqual(scheduled_slot_hour(config, delayed_start, 8), 8)
+
+
+    def test_analysis_input_preserves_collection_failure_as_unknown(self):
+        result = {
+            "run": {
+                "run_id": "run-20260821T080700+0900",
+                "started_at": "2026-08-21T08:07:00+09:00",
+                "scheduled_slot_hour_kst": 8,
+            },
+            "summary": {
+                "listing_count": 0, "seller_count": 0, "error_count": 1,
+                "rule_counts": {"critical": 0, "review_required": 0, "warning": 0, "normal": 0},
+            },
+            "source_statuses": {
+                "gmarket": {
+                    "status": "failed", "collection_method": "public_html",
+                    "queries_succeeded": 0, "queries_attempted": 3, "matched_candidates": 0,
+                    "incident": {"classification": "limitation"},
+                }
+            },
+            "listings": [], "sellers": [],
+            "rules_snapshot": [{
+                "id": "sample", "name": "예시 상품",
+                "policy": {"type": "minimum_display_price", "normal_min_krw": 80000, "critical_below_krw": 78000},
+            }],
+            "errors": [{
+                "source": "gmarket", "stage": "search_fetch", "category": "http_forbidden",
+                "classification": "limitation", "message": "HTTP Error 403",
+            }],
+            "incidents": [],
+        }
+
+        document = analysis_input(result)
+
+        self.assertIn("| gmarket | failed |", document)
+        self.assertIn("탐지 결과 없음(채널별 수집 상태 확인 필요)", document)
+        self.assertIn("`failed` 또는 `partial` 채널은 위반 없음이나 상품 삭제로 단정하지 않습니다.", document)
+        self.assertIn("HTTP Error 403", document)
+
+    @patch("src.monitor.post_drive_gateway")
+    def test_drive_payload_includes_daily_analysis_input(self, post_gateway):
+        post_gateway.return_value = {"ok": True}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result_path = root / "run-20260821T080700+0900.json"
+            result_path.write_text(json.dumps({"run": {"run_id": "run-20260821T080700+0900"}}), encoding="utf-8")
+            briefing_path = root / "2026-08-21_08시_기본_브리핑.md"
+            briefing_path.write_text("briefing", encoding="utf-8")
+            analysis_path = root / "2026-08-21_AI_가격분석_입력.md"
+            analysis_path.write_text("analysis", encoding="utf-8")
+
+            post_to_drive("https://example.test", "secret", result_path, briefing_path, analysis_path)
+
+        payload = post_gateway.call_args.args[1]
+        self.assertEqual(payload["analysis_input_name"], analysis_path.name)
+        self.assertIn("analysis_input_base64", payload)
+        self.assertIn("analysis_input_sha256", payload)
 
 
 if __name__ == "__main__":
