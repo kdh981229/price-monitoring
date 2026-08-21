@@ -63,7 +63,29 @@ function doPost(e) {
       const briefing = createBriefingOnce_(briefingFolder, payload.briefing_name, briefingBytes, payload.briefing_sha256);
       briefingId = briefing.getId();
     }
-    return jsonResponse_({ok: true, run_id: payload.run_id, immutable_file_id: immutable.getId(), briefing_file_id: briefingId});
+    let analysisInputId = null;
+    if (payload.analysis_input_base64) {
+      requireFields_(payload, ['analysis_input_name', 'analysis_input_sha256']);
+      if (!/^\d{4}-\d{2}-\d{2}_AI_가격분석_입력\.md$/.test(payload.analysis_input_name)) {
+        throw new Error('invalid analysis_input_name');
+      }
+      if (payload.analysis_input_name.slice(0, 10) !== dateMatch[1] + '-' + dateMatch[2] + '-' + dateMatch[3]) {
+        throw new Error('analysis input date mismatch');
+      }
+      const analysisBytes = Utilities.base64Decode(payload.analysis_input_base64);
+      verifySha256_(analysisBytes, payload.analysis_input_sha256);
+      const analysisFolder = ensurePath_(root, ['analysis-input', dateMatch[1], dateMatch[2]]);
+      // A fallback or manual rerun must not rewrite the first daily analysis input.
+      const analysisFile = createBriefingOnce_(analysisFolder, payload.analysis_input_name, analysisBytes, payload.analysis_input_sha256);
+      analysisInputId = analysisFile.getId();
+    }
+    return jsonResponse_({
+      ok: true,
+      run_id: payload.run_id,
+      immutable_file_id: immutable.getId(),
+      briefing_file_id: briefingId,
+      analysis_input_file_id: analysisInputId
+    });
   } catch (error) {
     console.error(error);
     return jsonResponse_({ok: false, error: String(error && error.message ? error.message : error)});
