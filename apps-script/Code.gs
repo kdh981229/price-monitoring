@@ -9,6 +9,9 @@ function doGet() {
 function doPost(e) {
   try {
     const payload = JSON.parse(e.postData.contents);
+    if (payload.action === 'pc_price_snapshot') {
+      return jsonResponse_(storePcPriceSnapshot_(payload));
+    }
     const expectedSecret = PropertiesService.getScriptProperties().getProperty('SHARED_SECRET');
     if (!expectedSecret || payload.secret !== expectedSecret) {
       throw new Error('unauthorized');
@@ -151,6 +154,27 @@ function storeWatchdogCheck_(payload) {
     incident_file_id: incidentId,
     incident_created: incidentCreated
   };
+}
+
+/** 사용자 PC의 네이버쇼핑 가격 수집 결과. GitHub와 다른 비밀값(PC_SHARED_SECRET)을 쓴다. */
+function storePcPriceSnapshot_(payload) {
+  const expected = PropertiesService.getScriptProperties().getProperty('PC_SHARED_SECRET');
+  if (!expected || payload.pc_secret !== expected) throw new Error('unauthorized');
+  requireFields_(payload, ['date', 'json_base64', 'json_sha256', 'md_base64', 'md_sha256']);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(payload.date))) throw new Error('invalid date');
+  const jsonBytes = Utilities.base64Decode(payload.json_base64);
+  verifySha256_(jsonBytes, payload.json_sha256);
+  const parsed = JSON.parse(Utilities.newBlob(jsonBytes).getDataAsString('UTF-8'));
+  if (parsed.record_type !== 'pc_price_snapshot' || parsed.date !== payload.date) throw new Error('pc snapshot identity mismatch');
+  const mdBytes = Utilities.base64Decode(payload.md_base64);
+  verifySha256_(mdBytes, payload.md_sha256);
+
+  const parts = String(payload.date).split('-');
+  const folder = ensurePath_(DriveApp.getFolderById(ROOT_FOLDER_ID), ['pc-prices', parts[0], parts[1]]);
+  // 같은 날 다시 수집(예: 놓친 실행 보완)하면 그날 파일을 최신 결과로 바꾼다.
+  const json = replaceNamedFile_(folder, payload.date + '_PC_네이버쇼핑_가격.json', Utilities.newBlob(jsonBytes).getDataAsString('UTF-8'), 'application/json');
+  const md = replaceNamedFile_(folder, payload.date + '_PC_네이버쇼핑_가격.md', Utilities.newBlob(mdBytes).getDataAsString('UTF-8'), 'text/markdown');
+  return {ok: true, json_file_id: json.getId(), md_file_id: md.getId()};
 }
 
 function ensurePath_(root, parts) {
