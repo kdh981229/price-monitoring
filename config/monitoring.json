@@ -10,28 +10,35 @@
     20
   ],
   "briefing_hour_kst": 8,
+  "seller_registry_path": "config/seller_registry.json",
   "sources": [
     {
       "id": "naver",
       "name": "네이버",
-      "url": "https://search.naver.com/search.naver?query={query}",
+      "collection_method": "naver_apihub_web",
+      "discovery_role": "primary_api",
+      "url": "https://naverapihub.apigw.ntruss.com/search/v1/webkr?query={query}&display={display}&start=1&format=json",
       "allowed_domains": []
     },
     {
       "id": "daum",
       "name": "다음",
-      "url": "https://search.daum.net/search?w=tot&q={query}",
+      "collection_method": "kakao_web_api",
+      "discovery_role": "supplemental_api",
+      "url": "https://dapi.kakao.com/v2/search/web?query={query}&size={size}&sort=accuracy",
       "allowed_domains": []
     },
     {
       "id": "google",
       "name": "구글",
+      "discovery_role": "supplemental_index",
       "url": "https://www.google.com/search?hl=ko&gl=kr&q={query}",
       "allowed_domains": []
     },
     {
       "id": "11st",
       "name": "11번가",
+      "discovery_role": "direct_marketplace",
       "url": "https://search.11st.co.kr/Search.tmall?kwd={query}",
       "allowed_domains": [
         "11st.co.kr"
@@ -40,6 +47,7 @@
     {
       "id": "gmarket",
       "name": "G마켓",
+      "discovery_role": "direct_marketplace",
       "url": "https://browse.gmarket.co.kr/search?keyword={query}",
       "allowed_domains": [
         "gmarket.co.kr"
@@ -48,6 +56,7 @@
     {
       "id": "auction",
       "name": "옥션",
+      "discovery_role": "direct_marketplace",
       "url": "https://browse.auction.co.kr/search?keyword={query}",
       "allowed_domains": [
         "auction.co.kr"
@@ -117,7 +126,9 @@
     "timeout_seconds": 20,
     "retries": 2,
     "max_candidates_per_query": 12,
-    "max_detail_pages_per_run": 40,
+    "max_detail_pages_per_run": 12,
+    "detail_timeout_seconds": 6,
+    "detail_request_interval_seconds": 2.0,
     "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/127.0 Safari/537.36 PriceMonitoring/1.0"
   },
   "drive": {
