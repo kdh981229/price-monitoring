@@ -1,15 +1,20 @@
+import inspect
 import json
 import tempfile
 import urllib.error
 import unittest
 
-from unittest.mock import MagicMock, patch
-
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
-from src.monitor import analysis_input, canonical_url, classify_product, display_price, evaluate, post_drive_gateway, post_to_drive, scheduled_slot_hour
+from src.monitor import (
+    actionable_price, analysis_input, canonical_url, classify_product, display_price, evaluate,
+    manual_seller_metadata, naver_web_candidates, post_drive_gateway, post_to_drive,
+    scheduled_slot_hour, source_error,
+    trigger_metadata,
+)
 
 
 PRODUCTS = [
@@ -48,6 +53,52 @@ class MonitorRulesTest(unittest.TestCase):
         url = canonical_url("https://shop.example/item/1?utm_source=x&item=2", "https://example.com")
         self.assertEqual(url, "https://shop.example/item/1?item=2")
 
+    def test_delayed_08_schedule_keeps_08_slot(self):
+        config = {"schedule_hours_kst": [0, 4, 8, 12, 16, 20]}
+        delayed_start = datetime(2026, 8, 7, 9, 30, tzinfo=ZoneInfo("Asia/Seoul"))
+        self.assertEqual(scheduled_slot_hour(config, delayed_start, 8), 8)
+
+    def test_naver_web_search_is_discovery_only(self):
+        payload = {"items": [{
+            "title": "<b>정관장 홍삼보가</b> 69,500원", "link": "https://shop.example/item/1",
+            "description": "홍삼보가 특가",
+        }]}
+        candidate = naver_web_candidates(payload, "https://naverapihub.apigw.ntruss.com", 10)[0]
+        self.assertEqual(candidate["url"], "https://shop.example/item/1")
+        self.assertEqual(candidate["context"], "홍삼보가 특가")
+        # Web search text is not a price contract, so it must never create an automatic price alert.
+        self.assertNotIn("price_observation", candidate)
+
+    def test_conflicting_price_evidence_is_not_actionable(self):
+        observations = [
+            {"price_krw": 79000, "actionable": True},
+            {"price_krw": 75000, "actionable": True},
+        ]
+        self.assertIsNone(actionable_price(observations))
+
+    def test_registry_requires_exact_verified_url(self):
+        records = [{
+            "verification_status": "verified", "match_urls": ["https://shop.example/item/1"],
+            "company_name": "확인판매자", "public_phone": "02-1234-5678",
+        }]
+        self.assertEqual(manual_seller_metadata(records, "https://shop.example/item/1")["company_name"], "확인판매자")
+        self.assertEqual(manual_seller_metadata(records, "https://shop.example/item/2"), {})
+
+    def test_gmarket_403_is_method_limitation(self):
+        error = source_error({"id": "gmarket"}, "홍삼보가", RuntimeError("HTTP Error 403"), "search_fetch")
+        self.assertEqual(error["classification"], "limitation")
+
+    def test_naver_401_is_configuration_error(self):
+        error = source_error({"id": "naver"}, "홍삼보가", RuntimeError("HTTP Error 401: Unauthorized"), "search_fetch")
+        self.assertEqual(error["category"], "configuration_error")
+        self.assertEqual(error["classification"], "error")
+
+    def test_fetcher_allows_a_bounded_detail_timeout(self):
+        from src.monitor import Fetcher
+        fetcher = Fetcher({"timeout_seconds": 20, "retries": 2, "user_agent": "test"})
+        self.assertEqual(fetcher.timeout, 20)
+        self.assertIn("timeout", inspect.signature(Fetcher.get).parameters)
+
     @patch("src.monitor.time.sleep")
     @patch("src.monitor.urllib.request.urlopen")
     def test_drive_gateway_retries_one_transient_404(self, urlopen, sleep):
@@ -63,11 +114,11 @@ class MonitorRulesTest(unittest.TestCase):
         self.assertEqual(urlopen.call_count, 2)
         sleep.assert_called_once_with(5)
 
-    def test_delayed_08_schedule_keeps_08_slot(self):
-        config = {"schedule_hours_kst": [0, 4, 8, 12, 16, 20]}
-        delayed_start = datetime(2026, 8, 7, 9, 30, tzinfo=ZoneInfo("Asia/Seoul"))
-        self.assertEqual(scheduled_slot_hour(config, delayed_start, 8), 8)
-
+    def test_delayed_scheduled_run_creates_scheduler_error(self):
+        now = datetime(2026, 8, 11, 3, 2, tzinfo=ZoneInfo("Asia/Seoul"))
+        trigger, incidents = trigger_metadata(now, 0, "schedule", 7, "123", "https://example.com/run/123")
+        self.assertEqual(trigger["started_late_minutes"], 175)
+        self.assertEqual(incidents[0]["classification"], "error")
 
     def test_analysis_input_preserves_collection_failure_as_unknown(self):
         result = {
@@ -128,4 +179,3 @@ class MonitorRulesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

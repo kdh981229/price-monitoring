@@ -1,0 +1,26 @@
+name: Keep scheduled workflows alive
+
+# GitHub는 60일 동안 저장소 활동이 없으면 예약 워크플로를 자동 비활성화한다.
+# 매주 수집·감시 워크플로를 다시 "활성화" 요청해 비활동 타이머를 초기화한다. 커밋은 만들지 않는다.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 2 * * 1"
+
+permissions:
+  actions: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Re-enable collection and watchdog workflows
+        shell: bash
+        run: |
+          for wf in collect.yml watchdog.yml keepalive.yml; do
+            gh api -X PUT "repos/${{ github.repository }}/actions/workflows/${wf}/enable"
+            echo "enabled: ${wf}"
+          done
