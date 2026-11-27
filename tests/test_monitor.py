@@ -69,6 +69,21 @@ class MonitorRulesTest(unittest.TestCase):
         # Web search text is not a price contract, so it must never create an automatic price alert.
         self.assertNotIn("price_observation", candidate)
 
+    def test_pc_prices_reuse_product_rules(self):
+        from src.pc_prices import build_rows
+        products = PRODUCTS[:1] + [{
+            "id": "boga", "name": "보가", "strong_phrases": ["홍삼보가"], "weak_terms": [], "context_terms": [],
+            "exclude_terms": [], "policy": {"type": "minimum_display_price", "normal_min_krw": 80000, "critical_below_krw": 78000},
+        }]
+        products[0] = dict(products[0], name="본정", policy={"type": "exposure_prohibited_except_allowlist", "allowlist_urls": []})
+        rows = build_rows({"q": [
+            {"title": "정관장 홍삼보가 30포", "price": 69000, "product_id": "1", "url": "https://n/1"},
+            {"title": "정관장 홍삼보가 30포", "price": 69000, "product_id": "1", "url": "https://n/1"},
+            {"title": "정관장 본정스틱", "price": 30000, "product_id": "2", "url": "https://n/2"},
+        ]}, products)
+        self.assertEqual(len(rows), 1)  # duplicate id merged, excluded stick dropped
+        self.assertEqual(rows[0]["rule"], "critical")
+
     def test_conflicting_price_evidence_is_not_actionable(self):
         observations = [
             {"price_krw": 79000, "actionable": True},
